@@ -19,12 +19,6 @@ import signal
 import os
 import stat
 import traceback
-from aiohttp import web
-import aiohttp
-import json
-import logging
-logging.basicConfig(level=logging.DEBUG,
-                    format='%(asctime)s - %(filename)s[line:%(lineno)d] - %(levelname)s: %(message)s')
 
 
 TG_DATACENTER_PORT = 443
@@ -136,8 +130,8 @@ def init_config():
         if not re.fullmatch("[0-9a-fA-F]{32}", secret):
             fixed_secret = re.sub(r"[^0-9a-fA-F]", "", secret).zfill(32)[:32]
 
-            logging.info("Bad secret for user %s, should be 32 hex chars, got %s. " % (user, secret))
-            logging.info("Changing it to %s" % fixed_secret)
+            print_err("Bad secret for user %s, should be 32 hex chars, got %s. " % (user, secret))
+            print_err("Changing it to %s" % fixed_secret)
 
             conf_dict["USERS"][user] = fixed_secret
 
@@ -176,17 +170,17 @@ def init_config():
             modes["secure"] = False
 
     if not modes["classic"] and not modes["secure"] and not modes["tls"]:
-        logging.info("No known modes enabled, enabling tls-only mode")
+        print_err("No known modes enabled, enabling tls-only mode")
         modes["tls"] = True
 
     if legacy_warning:
-        logging.info("Legacy options SECURE_ONLY or TLS_ONLY detected")
-        logging.info("Please use MODES in your config instead:")
-        logging.info("MODES = {")
-        logging.info('    "classic": %s,' % modes["classic"])
-        logging.info('    "secure": %s,' % modes["secure"])
-        logging.info('    "tls": %s' % modes["tls"])
-        logging.info("}")
+        print_err("Legacy options SECURE_ONLY or TLS_ONLY detected")
+        print_err("Please use MODES in your config instead:")
+        print_err("MODES = {")
+        print_err('    "classic": %s,' % modes["classic"])
+        print_err('    "secure": %s,' % modes["secure"])
+        print_err('    "tls": %s' % modes["tls"])
+        print_err("}")
 
     conf_dict["MODES"] = modes
 
@@ -306,7 +300,7 @@ def apply_upstream_proxy_settings():
     # apply socks settings in place
     if config.SOCKS5_HOST and config.SOCKS5_PORT:
         import socks
-        logging.info("Socket-proxy mode activated, it is incompatible with advertising and uvloop")
+        print_err("Socket-proxy mode activated, it is incompatible with advertising and uvloop")
         socks.set_default_proxy(socks.PROXY_TYPE_SOCKS5, config.SOCKS5_HOST, config.SOCKS5_PORT,
                                 username=config.SOCKS5_USER, password=config.SOCKS5_PASS)
         if not hasattr(socket, "origsocket"):
@@ -365,8 +359,7 @@ def use_slow_bundled_cryptography_module():
 
     msg = "To make the program a *lot* faster, please install cryptography module: "
     msg += "pip install cryptography\n"
-    #print(msg, flush=True, file=sys.stderr)
-    logging.info(msg)
+    print(msg, flush=True, file=sys.stderr)
 
     class BundledEncryptorAdapter:
         __slots__ = ('mode', )
@@ -401,8 +394,8 @@ except ImportError:
         create_aes_ctr, create_aes_cbc = use_slow_bundled_cryptography_module()
 
 
-#def logging.info(*params):
-#    print(*params, file=sys.stderr, flush=True)
+def print_err(*params):
+    print(*params, file=sys.stderr, flush=True)
 
 
 def ensure_users_in_user_stats():
@@ -411,9 +404,6 @@ def ensure_users_in_user_stats():
     for user in config.USERS:
         user_stats[user].update()
 
-def add_user_to_user_stats(user):
-    global user_stats
-    user_stats[user].update()
 
 def init_proxy_start_time():
     global proxy_start_time
@@ -428,13 +418,6 @@ def update_stats(**kw_stats):
 def update_user_stats(user, **kw_stats):
     global user_stats
     user_stats[user].update(**kw_stats)
-
-async def update_user_flow(user, flow):
-    logging.info('update_user_flow user:%s  flow:%d'%(user,flow))
-    #http://143.198.133.169:9035/updateflow?token=53b9b2c9-b45a-4d0d-9d61-0a35813b2efb&ip=209.250.247.103&useflow=1024
-    UPDATE_FLOW_URL = "http://%s:%d/updateflow?token=%s&useflow=%d&ip=%s"%(config.CENTER_SERVER_HOST,
-        config.CENTER_SERVER_PORT,config.USERS[user],flow,my_ip_info["ipv4"])
-    await make_http_req(UPDATE_FLOW_URL,config.CENTER_SERVER_HOST,config.CENTER_SERVER_PORT)
 
 
 def update_durations(duration):
@@ -507,7 +490,6 @@ class TgConnectionPool:
         self.pools = {}
 
     async def open_tg_connection(self, host, port, init_func=None):
-        logging.info("open_tg_connection %s:%d ,remain:%d",host,port,len(self.pools))
         task = asyncio.open_connection(host, port, limit=get_to_clt_bufsize())
         reader_tgt, writer_tgt = await asyncio.wait_for(task, timeout=config.TG_CONNECT_TIMEOUT)
 
@@ -616,12 +598,12 @@ class FakeTLSStreamReader(LayeredStreamReaderBase):
                 return b""
 
             if tls_rec_type not in [b"\x14", b"\x17"]:
-                logging.info("BUG: bad tls type %s in FakeTLSStreamReader" % tls_rec_type)
+                print_err("BUG: bad tls type %s in FakeTLSStreamReader" % tls_rec_type)
                 return b""
 
             version = await self.upstream.readexactly(2)
             if version != b"\x03\x03":
-                logging.info("BUG: unknown version %s in FakeTLSStreamReader" % version)
+                print_err("BUG: unknown version %s in FakeTLSStreamReader" % version)
                 return b""
 
             data_len = int.from_bytes(await self.upstream.readexactly(2), "big")
@@ -703,7 +685,7 @@ class CryptoWrappedStreamWriter(LayeredStreamWriterBase):
 
     def write(self, data, extra={}):
         if len(data) % self.block_size != 0:
-            logging.info("BUG: writing %d bytes not aligned to block size %d" % (
+            print_err("BUG: writing %d bytes not aligned to block size %d" % (
                       len(data), self.block_size))
             return 0
         q = self.encryptor.encrypt(data)
@@ -727,13 +709,13 @@ class MTProtoFrameStreamReader(LayeredStreamReaderBase):
 
         len_is_bad = (msg_len % len(PADDING_FILLER) != 0)
         if not MIN_MSG_LEN <= msg_len <= MAX_MSG_LEN or len_is_bad:
-            logging.info("msg_len is bad, closing connection msg_len:%d", msg_len)
+            print_err("msg_len is bad, closing connection", msg_len)
             return b""
 
         msg_seq_bytes = await self.upstream.readexactly(4)
         msg_seq = int.from_bytes(msg_seq_bytes, "little", signed=True)
         if msg_seq != self.seq_no:
-            logging.info("unexpected seq_no")
+            print_err("unexpected seq_no")
             return b""
 
         self.seq_no += 1
@@ -800,7 +782,7 @@ class MTProtoCompactFrameStreamWriter(LayeredStreamWriterBase):
         LARGE_PKT_BORGER = 256 ** 3
 
         if len(data) % 4 != 0:
-            logging.info("BUG: MTProtoFrameStreamWriter attempted to send msg with len. len:%d", len(data))
+            print_err("BUG: MTProtoFrameStreamWriter attempted to send msg with len", len(data))
             return 0
 
         if extra.get("SIMPLE_ACK"):
@@ -813,7 +795,7 @@ class MTProtoCompactFrameStreamWriter(LayeredStreamWriterBase):
         elif len_div_four < LARGE_PKT_BORGER:
             return self.upstream.write(b'\x7f' + int.to_bytes(len_div_four, 3, 'little') + data)
         else:
-            logging.info("Attempted to send too large pkt len = %d", len(data))
+            print_err("Attempted to send too large pkt len =", len(data))
             return 0
 
 
@@ -904,7 +886,7 @@ class ProxyReqStreamReader(LayeredStreamReaderBase):
             conn_id, confirm = data[4:12], data[12:16]
             return confirm, {"SIMPLE_ACK": True}
 
-        logging.info("unknown rpc ans type:%s", ans_type)
+        print_err("unknown rpc ans type:", ans_type)
         return b""
 
 
@@ -947,7 +929,7 @@ class ProxyReqStreamWriter(LayeredStreamWriterBase):
         FLAG_QUICKACK = 0x80000000
 
         if len(msg) % 4 != 0:
-            logging.info("BUG: attempted to send msg with len %d" % len(msg))
+            print_err("BUG: attempted to send msg with len %d" % len(msg))
             return 0
 
         flags = FLAG_HAS_AD_TAG | FLAG_MAGIC | FLAG_EXTMODE2
@@ -1263,7 +1245,7 @@ async def handle_handshake(reader, writer):
         ip = peer[0] if peer else "unknown ip"
         peer = await handle_proxy_protocol(reader, peer)
         if not peer:
-            logging.info("Client from %s sent bad proxy protocol headers" % ip)
+            print_err("Client from %s sent bad proxy protocol headers" % ip)
             await handle_bad_client(reader, writer, None)
             return False
 
@@ -1370,13 +1352,13 @@ async def do_direct_handshake(proto_tag, dc_idx, dec_key_and_iv=None):
     try:
         reader_tgt, writer_tgt = await tg_connection_pool.get_connection(dc, TG_DATACENTER_PORT)
     except ConnectionRefusedError as E:
-        logging.info("Got connection refused while trying to connect to :%s:%d", dc, TG_DATACENTER_PORT)
+        print_err("Got connection refused while trying to connect to", dc, TG_DATACENTER_PORT)
         return False
     except ConnectionAbortedError as E:
-        logging.info("The Telegram server connection is bad: %d (%s %s) %s" % (dc_idx, addr, port, E))
+        print_err("The Telegram server connection is bad: %d (%s %s) %s" % (dc_idx, addr, port, E))
         return False
     except (OSError, asyncio.TimeoutError) as E:
-        logging.info("Unable to connect to :%s:%d", dc, TG_DATACENTER_PORT)
+        print_err("Unable to connect to", dc, TG_DATACENTER_PORT)
         return False
 
     while True:
@@ -1564,13 +1546,13 @@ async def do_middleproxy_handshake(proto_tag, dc_idx, cl_ip, cl_port):
         ret = await tg_connection_pool.get_connection(addr, port, middleproxy_handshake)
         reader_tgt, writer_tgt, my_ip, my_port = ret
     except ConnectionRefusedError as E:
-        logging.info("The Telegram server %d (%s %s) is refusing connections" % (dc_idx, addr, port))
+        print_err("The Telegram server %d (%s %s) is refusing connections" % (dc_idx, addr, port))
         return False
     except ConnectionAbortedError as E:
-        logging.info("The Telegram server connection is bad: %d (%s %s) %s" % (dc_idx, addr, port, E))
+        print_err("The Telegram server connection is bad: %d (%s %s) %s" % (dc_idx, addr, port, E))
         return False
     except (OSError, asyncio.TimeoutError) as E:
-        logging.info("Unable to connect to the Telegram server %d (%s %s)" % (dc_idx, addr, port))
+        print_err("Unable to connect to the Telegram server %d (%s %s)" % (dc_idx, addr, port))
         return False
 
     writer_tgt = ProxyReqStreamWriter(writer_tgt, cl_ip, cl_port, my_ip, my_port, proto_tag)
@@ -1579,8 +1561,7 @@ async def do_middleproxy_handshake(proto_tag, dc_idx, cl_ip, cl_port):
     return reader_tgt, writer_tgt
 
 
-async def tg_connect_reader_to_writer(rd, wr, user, rd_buf_size, is_upstream,data_transfered):
-    t = time.time()
+async def tg_connect_reader_to_writer(rd, wr, user, rd_buf_size, is_upstream):
     try:
         while True:
             data = await rd.read(rd_buf_size)
@@ -1592,22 +1573,19 @@ async def tg_connect_reader_to_writer(rd, wr, user, rd_buf_size, is_upstream,dat
             if not data:
                 wr.write_eof()
                 await wr.drain()
-                logging.debug('%s,%s,%s,%s,%s,%d,%s',1,user,rd,wr,is_upstream,data_transfered[0],t)
                 return
             else:
-                data_transfered[0] += len(data)
-                logging.debug('%s,%s,%s,%s,%s,%d,%s',2,user,rd,wr,is_upstream,data_transfered[0],t)
                 if is_upstream:
                     update_user_stats(user, octets_from_client=len(data), msgs_from_client=1)
                 else:
                     update_user_stats(user, octets_to_client=len(data), msgs_to_client=1)
+
                 wr.write(data, extra)
                 await wr.drain()
     except (OSError, asyncio.IncompleteReadError) as e:
-        # logging.info(e)
-        logging.debug('%s,%s,%s,%s,%s,%d,%s',3,user,rd,wr,is_upstream,data_transfered[0],t)
+        # print_err(e)
         pass
-    logging.debug('%s,%s,%s,%s,%s,%d,%s',4,user,rd,wr,is_upstream,data_transfered[0],t)
+
 
 async def handle_client(reader_clt, writer_clt):
     set_keepalive(writer_clt.get_extra_info("socket"), config.CLIENT_KEEPALIVE, attempts=3)
@@ -1670,15 +1648,11 @@ async def handle_client(reader_clt, writer_clt):
             writer_clt = MTProtoSecureIntermediateFrameStreamWriter(writer_clt)
         else:
             return
-    bytes_write_to_client = []
-    bytes_write_to_client.append(0)
-    bytes_read_from_client = []
-    bytes_read_from_client.append(0)
 
     tg_to_clt = tg_connect_reader_to_writer(reader_tg, writer_clt, user,
-                                            get_to_clt_bufsize(), False,bytes_write_to_client)
+                                            get_to_clt_bufsize(), False)
     clt_to_tg = tg_connect_reader_to_writer(reader_clt, writer_tg,
-                                            user, get_to_tg_bufsize(), True,bytes_read_from_client)
+                                            user, get_to_tg_bufsize(), True)
     task_tg_to_clt = asyncio.ensure_future(tg_to_clt)
     task_clt_to_tg = asyncio.ensure_future(clt_to_tg)
 
@@ -1711,9 +1685,6 @@ async def handle_client(reader_clt, writer_clt):
     task_clt_to_tg.cancel()
 
     writer_tg.transport.abort()
-    logging.info('%s,%s,%s,%s,%s,%d,%d',user,reader_tg,writer_clt,reader_clt,writer_tg,bytes_write_to_client[0],bytes_read_from_client[0])
-    if (bytes_write_to_client[0] > 0):
-        await update_user_flow(user,bytes_write_to_client[0])
 
 
 async def handle_client_wrapper(reader, writer):
@@ -1839,56 +1810,6 @@ async def handle_metrics(reader, writer):
         writer.close()
 
 
-async def handle_add_user(request):
-    params = request.rel_url.query
-    logging.info("handle_add_user %s",params)
-    resp_data = {'result':0,'err':"success"}
-    if (not 'token' in params ) or (not 'tguserid' in params):
-        resp_data = {'result':-1,'err':"params error"}
-    else:
-        token = params['token']
-        tguserid = params['tguserid']
-        if (len(token) != 32):
-            resp_data = {'result':-2,'err':"token length error"}
-        else:
-            token_exists = False
-            for user in config.USERS:
-                secret = config.USERS[user]
-                if (secret == token):
-                    resp_data = {'result':-3,'err':"token already exists"}
-                    token_exists = True
-                    break
-            if (not token_exists):
-                #config.USERS['user%d'%len(config.USERS)] = token
-                config.USERS[tguserid] = token
-                logging.info(config.USERS)
-                add_user_to_user_stats(token)
-    return web.json_response(resp_data) 
-
-async def handle_del_user(request):
-    params = request.rel_url.query
-    logging.info("handle_del_user %s",params)
-    resp_data = {'result':0,'err':"success"}
-    if (not 'token' in params):
-        resp_data = {'result':-1,'err':"have no token"}
-    else:
-        token = params['token']
-        if (len(token) != 32):
-            resp_data = {'result':-2,'err':"token length error"}
-        else:
-            token_exists = False
-            for user in config.USERS:
-                secret = config.USERS[user]
-                if (secret == token):
-                    token_exists = True
-                    logging.info("handle_del_user remve user:%s:%s",user,token)
-                    del config.USERS[user]
-                    break
-            if (not token_exists):
-                resp_data = {'result':-3,'err':"token not exists"}
-    logging.info(config.USERS)
-    return web.json_response(resp_data) 
-
 async def stats_printer():
     global user_stats
     global last_client_ips
@@ -1898,34 +1819,32 @@ async def stats_printer():
     while True:
         await asyncio.sleep(config.STATS_PRINT_PERIOD)
 
-        logging.info("Stats for :%s", time.strftime("%d.%m.%Y %H:%M:%S"))
+        print("Stats for", time.strftime("%d.%m.%Y %H:%M:%S"))
         for user, stat in user_stats.items():
-            logging.info("%s: %d connects (%d current), %.2f MB, %d B ,%d B,%d msgs" % (
+            print("%s: %d connects (%d current), %.2f MB, %d msgs" % (
                 user, stat["connects"], stat["curr_connects"],
                 (stat["octets_from_client"] + stat["octets_to_client"]) / 1000000,
-                stat["octets_from_client"],
-                stat["octets_to_client"],
                 stat["msgs_from_client"] + stat["msgs_to_client"]))
-        #print(flush=True)
+        print(flush=True)
 
         if last_client_ips:
-            logging.info("New IPs:")
+            print("New IPs:")
             for ip in last_client_ips:
-                logging.info(ip)
-            #print(flush=True)
+                print(ip)
+            print(flush=True)
             last_client_ips.clear()
 
         if last_clients_with_time_skew:
-            logging.info("Clients with time skew (possible replay-attackers):")
+            print("Clients with time skew (possible replay-attackers):")
             for ip, skew_minutes in last_clients_with_time_skew.items():
-                logging.info("%s, clocks were %d minutes behind" % (ip, skew_minutes))
-            #print(flush=True)
+                print("%s, clocks were %d minutes behind" % (ip, skew_minutes))
+            print(flush=True)
             last_clients_with_time_skew.clear()
         if last_clients_with_same_handshake:
-            logging.info("Clients with duplicate handshake (likely replay-attackers):")
+            print("Clients with duplicate handshake (likely replay-attackers):")
             for ip, times in last_clients_with_same_handshake.items():
-                logging.info("%s, %d times" % (ip, times))
-            #print(flush=True)
+                print("%s, %d times" % (ip, times))
+            print(flush=True)
             last_clients_with_same_handshake.clear()
 
 
@@ -1944,31 +1863,6 @@ async def make_https_req(url, host="core.telegram.org"):
 
     headers, body = data.split(b"\r\n\r\n", 1)
     return headers, body
-
-async def make_http_req(url, host, port):
-    """ Make request, return resp body and headers. """
-    """
-    url_data = urllib.parse.urlparse(url)
-
-    HTTP_REQ_TEMPLATE = "\r\n".join(["GET %s HTTP/1.1", "Host: %s",
-                                     "Connection: close"]) + "\r\n\r\n"
-    #reader, writer = await asyncio.open_connection(url_data.netloc, port, ssl=False)
-    reader, writer = await asyncio.open_connection(host, port, ssl=False)
-    req = HTTP_REQ_TEMPLATE % (urllib.parse.quote(url_data.path), host)
-    writer.write(req.encode("utf8"))
-    data = await reader.read()
-    writer.close()
-
-    headers, body = data.split(b"\r\n\r\n", 1)
-    return headers, body
-    """
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url) as resp:
-            #print(resp.status)
-            data = await resp.text()
-            logging.info(data)
-            #headers, body = data.split(b"\r\n\r\n", 1)
-            #return headers, body
 
 
 def gen_tls_client_hello_msg(server_name):
@@ -2046,22 +1940,22 @@ async def get_mask_host_cert_len():
                 if len(cert) < MIN_CERT_LEN:
                     msg = ("The MASK_HOST %s returned several TLS records, this is not supported" %
                            config.MASK_HOST)
-                    logging.info(msg)
+                    print_err(msg)
                 elif len(cert) != fake_cert_len:
                     fake_cert_len = len(cert)
-                    logging.info("Got cert from the MASK_HOST %s, its length is %d" %
+                    print_err("Got cert from the MASK_HOST %s, its length is %d" %
                               (config.MASK_HOST, fake_cert_len))
             else:
-                logging.info("The MASK_HOST %s is not TLS 1.3 host, this is not recommended" %
+                print_err("The MASK_HOST %s is not TLS 1.3 host, this is not recommended" %
                           config.MASK_HOST)
         except ConnectionRefusedError:
-            logging.info("The MASK_HOST %s is refusing connections, this is not recommended" %
+            print_err("The MASK_HOST %s is refusing connections, this is not recommended" %
                       config.MASK_HOST)
         except (TimeoutError, asyncio.TimeoutError):
-            logging.info("Got timeout while getting TLS handshake from MASK_HOST %s" %
+            print_err("Got timeout while getting TLS handshake from MASK_HOST %s" %
                       config.MASK_HOST)
         except Exception as E:
-            logging.info("Failed to connect to MASK_HOST %s: %s" % (
+            print_err("Failed to connect to MASK_HOST %s: %s" % (
                       config.MASK_HOST, E))
 
         await asyncio.sleep(config.GET_CERT_LEN_PERIOD)
@@ -2087,19 +1981,19 @@ async def get_srv_time():
                 now_time = datetime.datetime.utcnow()
                 is_time_skewed = (now_time-srv_time).total_seconds() > MAX_TIME_SKEW
                 if is_time_skewed and config.USE_MIDDLE_PROXY and not disable_middle_proxy:
-                    logging.info("Time skew detected, please set the clock")
-                    logging.info("Server time:%s", srv_time, "your time:%s", now_time)
-                    logging.info("Disabling advertising to continue serving")
-                    logging.info("Putting down the shields against replay attacks")
+                    print_err("Time skew detected, please set the clock")
+                    print_err("Server time:", srv_time, "your time:", now_time)
+                    print_err("Disabling advertising to continue serving")
+                    print_err("Putting down the shields against replay attacks")
 
                     disable_middle_proxy = True
                     want_to_reenable_advertising = True
                 elif not is_time_skewed and want_to_reenable_advertising:
-                    logging.info("Time is ok, reenabling advertising")
+                    print_err("Time is ok, reenabling advertising")
                     disable_middle_proxy = False
                     want_to_reenable_advertising = False
         except Exception as E:
-            logging.info("Error getting server time:%s", E)
+            print_err("Error getting server time", E)
 
         await asyncio.sleep(config.GET_TIME_PERIOD)
 
@@ -2146,7 +2040,7 @@ async def update_middle_proxy_info():
                 raise Exception("no proxy data")
             TG_MIDDLE_PROXIES_V4 = v4_proxies
         except Exception as E:
-            logging.info("Error updating middle proxy list:%s", E)
+            print_err("Error updating middle proxy list:", E)
 
         try:
             v6_proxies = await get_new_proxies(PROXY_INFO_ADDR_V6)
@@ -2154,7 +2048,7 @@ async def update_middle_proxy_info():
                 raise Exception("no proxy data (ipv6)")
             TG_MIDDLE_PROXIES_V6 = v6_proxies
         except Exception as E:
-            logging.info("Error updating middle proxy list for IPv6:%s", E)
+            print_err("Error updating middle proxy list for IPv6:", E)
 
         try:
             headers, secret = await make_https_req(PROXY_SECRET_ADDR)
@@ -2162,41 +2056,12 @@ async def update_middle_proxy_info():
                 raise Exception("no secret")
             if secret != PROXY_SECRET:
                 PROXY_SECRET = secret
-                logging.info("Middle proxy secret updated")
+                print_err("Middle proxy secret updated")
         except Exception as E:
-            logging.info("Error updating middle proxy secret, using old:%s", E)
+            print_err("Error updating middle proxy secret, using old", E)
 
         await asyncio.sleep(config.PROXY_INFO_UPDATE_PERIOD)
 
-async def get_secret_config_list():
-    #http://143.198.133.169:9035/tokenlist?ip=209.250.247.103
-    SECRET_LIST_URL = "http://%s:%d/tokenlist?ip=%s"%(config.CENTER_SERVER_HOST,config.CENTER_SERVER_PORT,my_ip_info["ipv4"])
-    #SECRET_LIST_URL = "http://%s:%d/tokenlist?ip=%s"%(config.CENTER_SERVER_HOST,config.CENTER_SERVER_PORT,"209.250.247.103")
-    while True:
-        TIMEOUT = 5
-        try:
-            with urllib.request.urlopen(SECRET_LIST_URL, timeout=TIMEOUT) as f:
-                if f.status != 200:
-                    raise Exception("Invalid status code")
-                data =  f.read().decode().strip()
-                j = json.loads(data)
-                ret_code = j["code"]
-                if 1000 != ret_code:
-                    logging.info("load secret config failed,resp:%s"%(data))
-                    return
-                user_list = j["user"]
-                for user_info in user_list:
-                    id = user_info["id"]
-                    tguserid = user_info["tguserid"]
-                    token = user_info["token"]
-                    config.USERS[tguserid] = token
-                    logging.info("get_secret_config_list add user: %s:%s",tguserid,token)
-                ensure_users_in_user_stats()
-                break
-        except Exception as e:
-            logging.info("load secret config failed,exception:%s"%(e.message()))
-        await asyncio.sleep(1)
-    logging.info("load users: %s",config.USERS)
 
 def init_ip_info():
     global my_ip_info
@@ -2226,11 +2091,11 @@ def init_ip_info():
         my_ip_info["ipv6"] = None
 
     if my_ip_info["ipv6"] and (config.PREFER_IPV6 or not my_ip_info["ipv4"]):
-        logging.info("IPv6 found, using it for external communication")
+        print_err("IPv6 found, using it for external communication")
 
     if config.USE_MIDDLE_PROXY:
         if not my_ip_info["ipv4"] and not my_ip_info["ipv6"]:
-            logging.info("Failed to determine your ip, advertising disabled")
+            print_err("Failed to determine your ip, advertising disabled")
             disable_middle_proxy = True
 
 
@@ -2241,9 +2106,9 @@ def print_tg_info():
     print_default_warning = False
 
     if config.PORT == 3256:
-        logging.info("The default port 3256 is used, this is not recommended")
+        print("The default port 3256 is used, this is not recommended", flush=True)
         if not config.MODES["classic"] and not config.MODES["secure"]:
-            logging.info("Since you have TLS only mode enabled the best port is 443")
+            print("Since you have TLS only mode enabled the best port is 443", flush=True)
         print_default_warning = True
 
     if not config.MY_DOMAIN:
@@ -2262,14 +2127,14 @@ def print_tg_info():
                 params_encodeded = urllib.parse.urlencode(params, safe=':')
                 classic_link = "tg://proxy?{}".format(params_encodeded)
                 proxy_links.append({"user": user, "link": classic_link})
-                logging.info("{}: {}".format(user, classic_link))
+                print("{}: {}".format(user, classic_link), flush=True)
 
             if config.MODES["secure"]:
                 params = {"server": ip, "port": config.PORT, "secret": "dd" + secret}
                 params_encodeded = urllib.parse.urlencode(params, safe=':')
                 dd_link = "tg://proxy?{}".format(params_encodeded)
                 proxy_links.append({"user": user, "link": dd_link})
-                logging.info("{}: {}".format(user, dd_link))
+                print("{}: {}".format(user, dd_link), flush=True)
 
             if config.MODES["tls"]:
                 tls_secret = "ee" + secret + config.TLS_DOMAIN.encode().hex()
@@ -2280,24 +2145,24 @@ def print_tg_info():
                 params_encodeded = urllib.parse.urlencode(params, safe=':')
                 tls_link = "tg://proxy?{}".format(params_encodeded)
                 proxy_links.append({"user": user, "link": tls_link})
-                logging.info("{}: {}".format(user, tls_link))
+                print("{}: {}".format(user, tls_link), flush=True)
 
         if secret in ["00000000000000000000000000000000", "0123456789abcdef0123456789abcdef",
                       "00000000000000000000000000000001"]:
             msg = "The default secret {} is used, this is not recommended".format(secret)
-            logging.info(msg)
+            print(msg, flush=True)
             random_secret = "".join(myrandom.choice("0123456789abcdef") for i in range(32))
-            logging.info("You can change it to this random secret:%s", random_secret)
+            print("You can change it to this random secret:", random_secret, flush=True)
             print_default_warning = True
 
     if config.TLS_DOMAIN == "www.google.com":
-        logging.info("The default TLS_DOMAIN www.google.com is used, this is not recommended")
+        print("The default TLS_DOMAIN www.google.com is used, this is not recommended", flush=True)
         msg = "You should use random existing domain instead, bad clients are proxied there"
-        logging.info(msg)
+        print(msg, flush=True)
         print_default_warning = True
 
     if print_default_warning:
-        logging.info("Warning: one or more default settings detected")
+        print_err("Warning: one or more default settings detected")
 
 
 def setup_files_limit():
@@ -2306,7 +2171,7 @@ def setup_files_limit():
         soft_fd_limit, hard_fd_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
         resource.setrlimit(resource.RLIMIT_NOFILE, (hard_fd_limit, hard_fd_limit))
     except (ValueError, OSError):
-        logging.info("Failed to increase the limit of opened files")
+        print("Failed to increase the limit of opened files", flush=True, file=sys.stderr)
     except ImportError:
         pass
 
@@ -2329,7 +2194,7 @@ def setup_signals():
             init_config()
             ensure_users_in_user_stats()
             apply_upstream_proxy_settings()
-            logging.info("Config reloaded")
+            print("Config reloaded", flush=True, file=sys.stderr)
             print_tg_info()
 
         signal.signal(signal.SIGUSR2, reload_signal)
@@ -2342,7 +2207,7 @@ def try_setup_uvloop():
     try:
         import uvloop
         asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
-        logging.info("Found uvloop, using it for optimal performance")
+        print_err("Found uvloop, using it for optimal performance")
     except ImportError:
         pass
 
@@ -2416,16 +2281,6 @@ def create_servers(loop):
                                         config.METRICS_PORT)
             servers.append(loop.run_until_complete(task))
 
-    if config.USER_OPERATION_PORT is not None:
-        app = web.Application(loop=loop)
-        app.router.add_route('GET', '/adduser', handle_add_user)
-        app.router.add_route('GET', '/deluser', handle_del_user)
-        srv = loop.create_server(app.make_handler(), '0.0.0.0', config.USER_OPERATION_PORT)
-        logging.info('Server started at http://127.0.0.1:%d...'%(config.USER_OPERATION_PORT))
-        servers.append(loop.run_until_complete(srv))
-
-        
-
     return servers
 
 
@@ -2448,10 +2303,6 @@ def create_utilitary_tasks(loop):
 
     clear_resolving_cache_task = asyncio.Task(clear_ip_resolving_cache(), loop=loop)
     tasks.append(clear_resolving_cache_task)
-
-    # get secret config list
-    get_secret_config_task = asyncio.Task(get_secret_config_list(),loop=loop)
-    tasks.append(get_secret_config_task)
 
     return tasks
 
